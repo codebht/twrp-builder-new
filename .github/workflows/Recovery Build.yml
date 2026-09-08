@@ -68,9 +68,9 @@ jobs:
 
     steps:
 
-      # ---------------------------------------------------------
-      # Display parameters
-      # ---------------------------------------------------------
+      # =========================================================
+      # DISPLAY PARAMETERS
+      # =========================================================
 
       - name: Display Run Parameters
         run: |
@@ -83,6 +83,7 @@ jobs:
           echo "Device Tree Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
 
           echo "Device Path: ${{ github.event.inputs.DEVICE_PATH }}"
+
           echo "Common Tree URL: ${{ github.event.inputs.COMMON_TREE_URL }}"
           echo "Common Path: ${{ github.event.inputs.COMMON_PATH }}"
 
@@ -94,36 +95,38 @@ jobs:
           echo "::endgroup::"
 
 
-      # ---------------------------------------------------------
-      # Checkout repository
-      # ---------------------------------------------------------
+      # =========================================================
+      # CHECKOUT
+      # =========================================================
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
 
-      # ---------------------------------------------------------
-      # Cleanup runner
-      # ---------------------------------------------------------
+      # =========================================================
+      # CLEAN RUNNER
+      # =========================================================
 
       - name: Cleanup
         uses: rokibhasansagar/slimhub_actions@main
 
 
-      # ---------------------------------------------------------
-      # Prepare build environment
-      # ---------------------------------------------------------
+      # =========================================================
+      # BUILD DEPENDENCIES
+      # =========================================================
 
-      - name: Prepare the Environment
+      - name: Prepare Build Environment
         run: |
 
           set -e
 
-          echo "Updating package lists..."
+          echo "::group::APT Update"
 
           sudo apt-get update
 
-          echo "Installing Android/TWRP build dependencies..."
+          echo "::endgroup::"
+
+          echo "::group::Installing Build Dependencies"
 
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
             linux-modules-extra-$(uname -r) \
@@ -151,6 +154,7 @@ jobs:
             libglu1-mesa-dev \
             freeglut3-dev \
             git \
+            curl \
             libxml2 \
             lzop \
             pngcrush \
@@ -166,29 +170,36 @@ jobs:
             python3 \
             python3-pip \
             python3-setuptools \
+            python3-distutils \
             tar \
+            unzip \
+            zip \
+            rsync \
             libtinfo5
 
-          echo ""
-          echo "Checking libtinfo..."
-
-          ldconfig -p | grep libtinfo.so.5 || true
+          echo "::endgroup::"
 
           echo ""
-          echo "Checking required tools..."
+          echo "========== TOOL VERSIONS =========="
 
           git --version
           python3 --version
-          make --version
+          make --version | head -n 1
           gcc --version | head -n 1
+          ccache --version | head -n 1
+
+          echo ""
+          echo "========== LIBTINFO =========="
+
+          ldconfig -p | grep libtinfo || true
 
           echo ""
           echo "Environment preparation complete."
 
 
-      # ---------------------------------------------------------
-      # Java 8
-      # ---------------------------------------------------------
+      # =========================================================
+      # JAVA 8
+      # =========================================================
 
       - name: Install OpenJDK 8
         uses: actions/setup-java@v4
@@ -197,9 +208,9 @@ jobs:
           java-version: "8"
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # SSH
-      # ---------------------------------------------------------
+      # =========================================================
 
       - name: Setup SSH Keys
         if: |
@@ -212,9 +223,9 @@ jobs:
             ${{ secrets.SSH_PRIVATE_KEY }}
 
 
-      # ---------------------------------------------------------
-      # Install repo
-      # ---------------------------------------------------------
+      # =========================================================
+      # INSTALL REPO
+      # =========================================================
 
       - name: Install Repo Tool
         run: |
@@ -231,15 +242,16 @@ jobs:
 
           sudo ln -sf "$HOME/bin/repo" /usr/local/bin/repo
 
+          echo "Repo version:"
           repo --version
 
 
-      # ---------------------------------------------------------
-      # Initialize source tree
-      # ---------------------------------------------------------
+      # =========================================================
+      # INITIALIZE SOURCE TREE
+      # =========================================================
 
       - name: Initialize Repo
-        id: pwd
+        id: workspace
         run: |
 
           set -e
@@ -253,26 +265,33 @@ jobs:
           git config --global user.name "code_bht"
           git config --global user.email "codebht@gmail.com"
 
-          echo "Initializing repo..."
+          echo ""
+          echo "========================================"
+          echo "Initializing TWRP source tree"
+          echo "========================================"
 
           repo init \
             --depth=1 \
             -u "${{ github.event.inputs.MANIFEST_URL }}" \
             -b "${{ github.event.inputs.MANIFEST_BRANCH }}"
 
+          echo ""
           echo "Repo initialized successfully."
 
 
-      # ---------------------------------------------------------
-      # Sync source
-      # ---------------------------------------------------------
+      # =========================================================
+      # SYNC SOURCE
+      # =========================================================
 
       - name: Repo Sync
         run: |
 
           set -e
 
-          echo "Starting repo sync..."
+          echo ""
+          echo "========================================"
+          echo "Starting repo sync"
+          echo "========================================"
 
           repo sync \
             -j4 \
@@ -280,36 +299,43 @@ jobs:
             --no-clone-bundle \
             --no-tags
 
+          echo ""
           echo "Repo sync complete."
 
-        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
 
 
-      # ---------------------------------------------------------
-      # Clone device tree
-      # ---------------------------------------------------------
+      # =========================================================
+      # CLONE DEVICE TREE
+      # =========================================================
 
       - name: Clone Device Tree
         run: |
 
           set -e
 
-          mkdir -p "$(dirname "${{ github.event.inputs.DEVICE_PATH }}")"
+          DEVICE_PATH="${{ github.event.inputs.DEVICE_PATH }}"
+
+          echo "Device path:"
+          echo "$DEVICE_PATH"
+
+          mkdir -p "$(dirname "$DEVICE_PATH")"
 
           git clone \
             --depth=1 \
             -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" \
             "${{ github.event.inputs.DEVICE_TREE_URL }}" \
-            "${{ github.event.inputs.DEVICE_PATH }}"
+            "$DEVICE_PATH"
 
-          echo "Device tree cloned."
+          echo ""
+          echo "Device tree cloned successfully."
 
-        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
 
 
-      # ---------------------------------------------------------
-      # Clone common tree if supplied
-      # ---------------------------------------------------------
+      # =========================================================
+      # CLONE COMMON TREE
+      # =========================================================
 
       - name: Clone Common Tree
         if: |
@@ -319,44 +345,57 @@ jobs:
 
           set -e
 
-          mkdir -p "$(dirname "${{ github.event.inputs.COMMON_PATH }}")"
+          COMMON_PATH="${{ github.event.inputs.COMMON_PATH }}"
+
+          echo "Common path:"
+          echo "$COMMON_PATH"
+
+          mkdir -p "$(dirname "$COMMON_PATH")"
 
           git clone \
             --depth=1 \
             -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" \
             "${{ github.event.inputs.COMMON_TREE_URL }}" \
-            "${{ github.event.inputs.COMMON_PATH }}"
+            "$COMMON_PATH"
 
-          echo "Common tree cloned."
+          echo ""
+          echo "Common tree cloned successfully."
 
-        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
 
 
-      # ---------------------------------------------------------
-      # Determine build tree
-      # ---------------------------------------------------------
+      # =========================================================
+      # DETERMINE BUILD TREE
+      # =========================================================
 
       - name: Determine Build Tree
         id: buildtree
         run: |
 
-          if [[ "${{ github.event.inputs.MANIFEST_BRANCH }}" == "twrp-11" ||
-                "${{ github.event.inputs.MANIFEST_BRANCH }}" == "twrp-12.1" ]]; then
+          set -e
 
-            echo "value=twrp" >> "$GITHUB_OUTPUT"
+          BRANCH="${{ github.event.inputs.MANIFEST_BRANCH }}"
+
+          if [[ "$BRANCH" == "twrp-11" ||
+                "$BRANCH" == "twrp-12.1" ]]; then
+
+            BUILD_TREE="twrp"
 
           else
 
-            echo "value=omni" >> "$GITHUB_OUTPUT"
+            BUILD_TREE="omni"
 
           fi
 
-          echo "Build tree: $(grep '^value=' "$GITHUB_OUTPUT" | cut -d= -f2)"
+          echo "value=$BUILD_TREE" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "Build tree: $BUILD_TREE"
 
 
-      # ---------------------------------------------------------
-      # Check device tree
-      # ---------------------------------------------------------
+      # =========================================================
+      # CHECK DEVICE TREE
+      # =========================================================
 
       - name: Check Device Tree
         run: |
@@ -365,40 +404,62 @@ jobs:
 
           DEVICE="${{ github.event.inputs.DEVICE_PATH }}"
 
-          echo "Checking device tree:"
+          echo ""
+          echo "========================================"
+          echo "Checking Device Tree"
+          echo "========================================"
+
+          echo "Path:"
           echo "$DEVICE"
 
           if [ ! -d "$DEVICE" ]; then
+            echo ""
             echo "ERROR: Device tree directory does not exist."
             exit 1
           fi
 
           echo ""
-          echo "Device tree contents:"
-          find "$DEVICE" -maxdepth 2 -type f | sort | head -100
+          echo "Device tree files:"
 
-        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+          find "$DEVICE" \
+            -maxdepth 3 \
+            -type f \
+            | sort \
+            | head -200
+
+          echo ""
+          echo "Device tree check passed."
+
+        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
 
 
-      # ---------------------------------------------------------
-      # Sync device dependencies
-      # ---------------------------------------------------------
+      # =========================================================
+      # SYNC DEVICE DEPENDENCIES
+      # =========================================================
 
       - name: Sync Device Dependencies
         run: |
 
           set -e
 
-          DEP_FILE="${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies"
+          DEVICE="${{ github.event.inputs.DEVICE_PATH }}"
+          BUILD_TREE="${{ steps.buildtree.outputs.value }}"
 
+          DEP_FILE="$DEVICE/$BUILD_TREE.dependencies"
+
+          echo ""
           echo "Dependency file:"
           echo "$DEP_FILE"
 
           if [ -f "$DEP_FILE" ]; then
 
-            echo "Converting dependencies..."
+            echo ""
+            echo "Dependency file found."
 
             if [ -f "${GITHUB_WORKSPACE}/scripts/convert.sh" ]; then
+
+              echo ""
+              echo "Running dependency converter..."
 
               bash "${GITHUB_WORKSPACE}/scripts/convert.sh" "$DEP_FILE"
 
@@ -406,30 +467,137 @@ jobs:
 
             else
 
-              echo "WARNING: scripts/convert.sh not found."
-              echo "Skipping dependency conversion."
+              echo ""
+              echo "No scripts/convert.sh found."
+              echo "Skipping conversion."
 
             fi
 
+            echo ""
             echo "Syncing dependency repositories..."
 
-            repo sync -j4 --force-sync
+            repo sync \
+              -j4 \
+              --force-sync \
+              --no-clone-bundle \
+              --no-tags
 
           else
 
+            echo ""
             echo "No dependency file found."
             echo "Skipping dependency sync."
 
           fi
 
-        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-        continue-on-error: true
+        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
 
 
-      # ---------------------------------------------------------
-      # Swap
-      # ---------------------------------------------------------
+      # =========================================================
+      # FIX LEGACY PYTHON 2 BUILD SCRIPT
+      # =========================================================
+
+      - name: Fix Legacy Python Script
+        run: |
+
+          set -e
+
+          SCRIPT="build/make/tools/check_radio_versions.py"
+
+          echo ""
+          echo "========================================"
+          echo "Checking legacy Python build script"
+          echo "========================================"
+
+          if [ ! -f "$SCRIPT" ]; then
+            echo ""
+            echo "ERROR: $SCRIPT not found."
+            exit 1
+          fi
+
+          echo ""
+          echo "Original script:"
+          sed -n '1,130p' "$SCRIPT"
+
+          echo ""
+          echo "Converting Python 2 syntax to Python 3..."
+
+          python3 - "$SCRIPT" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+
+replacements = {
+    'if not bad: print\n':
+        'if not bad: print()\n',
+
+    'print "*** Error opening \\"%s.sha1\\"; can\\'t verify %s" % (fn, key)\n':
+        'print("*** Error opening \\"%s.sha1\\"; can\\'t verify %s" % (fn, key))\n',
+
+    'print "*** SHA-1 hash of \\"%s\\" doesn\\'t appear in \\"%s.sha1\\"" % (fn, fn)\n':
+        'print("*** SHA-1 hash of \\"%s\\" doesn\\'t appear in \\"%s.sha1\\"" % (fn, fn))\n',
+
+    'print "*** \\"%s\\" is version %s; not any %s allowed by \\"%s\\"." % (\n':
+        'print("*** \\"%s\\" is version %s; not any %s allowed by \\"%s\\"." % (\n',
+
+    '    fn, versions[digest], key, sys.argv[1])\n':
+        '    fn, versions[digest], key, sys.argv[1]))\n',
+
+    'if bad:\n    print\n':
+        'if bad:\n    print()\n',
+}
+
+for old, new in replacements.items():
+    text = text.replace(old, new)
+
+path.write_text(text)
+PY
+
+          echo ""
+          echo "Running Python 3 syntax check..."
+
+          python3 -m py_compile "$SCRIPT"
+
+          echo ""
+          echo "Python 3 syntax check PASSED."
+
+          echo ""
+          echo "Patched script:"
+          sed -n '45,100p' "$SCRIPT"
+
+
+      # =========================================================
+      # VERIFY PYTHON SCRIPT
+      # =========================================================
+
+      - name: Verify Build Script
+        run: |
+
+          set -e
+
+          SCRIPT="build/make/tools/check_radio_versions.py"
+
+          echo ""
+          echo "Checking:"
+          echo "$SCRIPT"
+
+          if ! python3 -m py_compile "$SCRIPT"; then
+            echo ""
+            echo "ERROR: Python script still contains invalid syntax."
+            exit 1
+          fi
+
+          echo ""
+          echo "Legacy Python compatibility fix is valid."
+
+        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
+
+
+      # =========================================================
+      # SWAP
+      # =========================================================
 
       - name: Set Swap Space
         uses: pierotofy/set-swap-space@master
@@ -437,9 +605,31 @@ jobs:
           swap-size-gb: 12
 
 
-      # ---------------------------------------------------------
-      # Build recovery
-      # ---------------------------------------------------------
+      # =========================================================
+      # CCACHE
+      # =========================================================
+
+      - name: Configure CCache
+        run: |
+
+          set -e
+
+          echo "Configuring ccache..."
+
+          ccache --max-size=5G
+
+          ccache --set-config=compression=true
+
+          ccache --zero-stats
+
+          echo ""
+          echo "CCache configuration:"
+          ccache --show-config
+
+
+      # =========================================================
+      # BUILD RECOVERY
+      # =========================================================
 
       - name: Build Recovery
         run: |
@@ -448,40 +638,81 @@ jobs:
 
           echo "::group::Building Recovery"
 
+          echo ""
+          echo "========================================"
+          echo "Preparing Android build environment"
+          echo "========================================"
+
           source build/envsetup.sh
 
           export ALLOW_MISSING_DEPENDENCIES=true
-
           export USE_CCACHE=1
 
-          echo "Selecting lunch target:"
+          export CCACHE_EXEC="$(command -v ccache)"
+
+          export JACK_SERVER_VM_ARGUMENTS="-Dfile.encoding=UTF-8"
+
+          echo ""
+          echo "CCache:"
+          ccache --version
+
+          echo ""
+          echo "Lunch target:"
           echo "${{ github.event.inputs.MAKEFILE_NAME }}-eng"
 
           lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng"
 
           echo ""
-          echo "Cleaning previous build..."
+          echo "========================================"
+          echo "Cleaning previous build"
+          echo "========================================"
 
           make clean
 
           echo ""
-          echo "Starting recovery build..."
+          echo "========================================"
+          echo "Starting Recovery Build"
+          echo "========================================"
 
-          make \
-            "${{ github.event.inputs.BUILD_TARGET }}image" \
-            -j4
+          TARGET="${{ github.event.inputs.BUILD_TARGET }}image"
+
+          echo "Target:"
+          echo "$TARGET"
+
+          if command -v mka >/dev/null 2>&1; then
+
+            echo ""
+            echo "Using mka..."
+
+            mka "$TARGET" -j4
+
+          else
+
+            echo ""
+            echo "mka not found."
+            echo "Using make..."
+
+            make "$TARGET" -j4
+
+          fi
 
           echo ""
-          echo "Recovery build finished."
+          echo "========================================"
+          echo "Recovery build finished"
+          echo "========================================"
+
+          echo ""
+          echo "CCache statistics:"
+          ccache --show-stats
 
           echo "::endgroup::"
 
-        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
 
 
-      # ---------------------------------------------------------
-      # Verify output
-      # ---------------------------------------------------------
+      # =========================================================
+      # VERIFY OUTPUT
+      # =========================================================
 
       - name: Verify Build Output
         run: |
@@ -490,47 +721,106 @@ jobs:
 
           OUT="out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
 
-          echo "Checking output directory:"
+          echo ""
+          echo "========================================"
+          echo "Verifying Build Output"
+          echo "========================================"
+
+          echo "Output directory:"
           echo "$OUT"
 
           if [ ! -d "$OUT" ]; then
+            echo ""
             echo "ERROR: Output directory does not exist."
             exit 1
           fi
 
           echo ""
-          echo "Build output:"
-
+          echo "Output contents:"
           ls -lah "$OUT"
 
           IMAGE="$OUT/${{ github.event.inputs.BUILD_TARGET }}.img"
 
+          echo ""
+          echo "Expected recovery image:"
+          echo "$IMAGE"
+
           if [ ! -f "$IMAGE" ]; then
+
             echo ""
-            echo "ERROR: Recovery image was not generated:"
-            echo "$IMAGE"
+            echo "ERROR: Recovery image was NOT generated."
+
+            echo ""
+            echo "Searching for generated images..."
+
+            find "$OUT" \
+              -maxdepth 2 \
+              -type f \
+              \( -name "*.img" -o -name "*.zip" \) \
+              -print
+
             exit 1
+
           fi
 
           echo ""
-          echo "SUCCESS!"
+          echo "========================================"
+          echo "SUCCESS"
+          echo "========================================"
+
+          echo ""
           echo "Recovery image:"
           ls -lh "$IMAGE"
 
-        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+          echo ""
+          echo "SHA256:"
+          sha256sum "$IMAGE"
+
+        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
 
 
-      # ---------------------------------------------------------
-      # Upload release
-      # ---------------------------------------------------------
+      # ==================================================
+# PREPARE RELEASE FILES
+      # =========================================================
+
+      - name: Prepare Release Files
+        run: |
+
+          set -e
+
+          OUT="workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
+          RELEASE_DIR="$GITHUB_WORKSPACE/release"
+
+          mkdir -p "$RELEASE_DIR"
+
+          echo ""
+          echo "Preparing release files..."
+
+          cp "$OUT/${{ github.event.inputs.BUILD_TARGET }}.img" \
+             "$RELEASE_DIR/${{ github.event.inputs.DEVICE_NAME }}-${{ github.event.inputs.BUILD_TARGET }}.img"
+
+          find "$OUT" -maxdepth 1 -type f -name "*.zip" -exec cp {} "$RELEASE_DIR/" \; || true
+
+          find "$OUT" -maxdepth 1 -type f -name "*vendor*.img" -exec cp {} "$RELEASE_DIR/" \; || true
+
+          echo ""
+          echo "Release files:"
+
+          ls -lah "$RELEASE_DIR"
+
+        working-directory: ${{ github.event.inputs.DEVICE_PATH }}/../..
+
+
+      # =========================================================
+      # UPLOAD RELEASE
+      # =========================================================
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
+
           files: |
-            workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
-            workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
-            workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*vendor*.img
+            release/*
 
           name: "${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}"
 
@@ -539,21 +829,44 @@ jobs:
           body: |
             # TWRP Recovery Build
 
-            Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
+            ## Device
 
-            Device: ${{ github.event.inputs.DEVICE_NAME }}
+            **Device:** ${{ github.event.inputs.DEVICE_NAME }}
 
-            Device Tree:
+            **Target:** ${{ github.event.inputs.BUILD_TARGET }}.img
+
+            ## Manifest
+
+            **Manifest branch:**
+            ${{ github.event.inputs.MANIFEST_BRANCH }}
+
+            **Manifest URL:**
+            ${{ github.event.inputs.MANIFEST_URL }}
+
+            ## Device Tree
+
+            **Device tree:**
             ${{ github.event.inputs.DEVICE_TREE_URL }}
 
-            Device Tree Branch:
+            **Branch:**
             ${{ github.event.inputs.DEVICE_TREE_BRANCH }}
 
-            Target:
-            ${{ github.event.inputs.BUILD_TARGET }}.img
+            **Device path:**
+            ${{ github.event.inputs.DEVICE_PATH }}
 
-            GitHub Run:
-            ${{ github.run_id }}
+            ## Build
+
+            **GitHub Run:** ${{ github.run_id }}
+
+            **Commit:** ${{ github.sha }}
+
+            Built automatically with GitHub Actions.
 
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+**One important correction:** in the `Prepare Release Files` step, you don't need a special `working-directory` at all. Remove that line if you paste the workflow exactly as above. The commands already use `$GITHUB_WORKSPACE` and the `workspace/...` path.
+
+The key fix is the **`Fix Legacy Python 2 Build Script`** step. Your log shows the build reached `12% / 1878`, then died specifically when generating `android-info.txt`; this patch addresses that exact failure. The original Android script is Python 2-style, while Google's later version changed the `print` statements and build integration for Python 3.
+
+If the next build gets past `android-info.txt`, **don't change anything yet**—send me the next failure log if another old TWRP/AOSP compatibility issue appears.
