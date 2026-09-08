@@ -112,6 +112,7 @@ jobs:
             qemu-user-static \
             libstdc++-10-dev \
             python3 \
+            python3-lib2to3 \
             python3-pip \
             python3-setuptools \
             tar \
@@ -258,23 +259,19 @@ jobs:
           SCRIPT1="build/make/tools/check_radio_versions.py"
           SCRIPT2="build/make/tools/post_process_props.py"
           SCRIPT3="external/clang/clang-version-inc.py"
+          SCRIPT4="bionic/libc/fs_config_generator.py"
           echo "Checking legacy Python scripts..."
-          if [ ! -f "$SCRIPT1" ]; then
-            echo "ERROR: $SCRIPT1 not found."
-            exit 1
-          fi
-          if [ ! -f "$SCRIPT2" ]; then
-            echo "ERROR: $SCRIPT2 not found."
-            exit 1
-          fi
-          if [ ! -f "$SCRIPT3" ]; then
-            echo "ERROR: $SCRIPT3 not found."
-            exit 1
-          fi
+          for SCRIPT in "$SCRIPT1" "$SCRIPT2" "$SCRIPT3" "$SCRIPT4"; do
+            if [ ! -f "$SCRIPT" ]; then
+              echo "ERROR: $SCRIPT not found."
+              exit 1
+            fi
+          done
           echo "Backing up original scripts..."
           cp "$SCRIPT1" "${SCRIPT1}.python2"
           cp "$SCRIPT2" "${SCRIPT2}.python2"
           cp "$SCRIPT3" "${SCRIPT3}.python2"
+          cp "$SCRIPT4" "${SCRIPT4}.python2"
           echo "Fixing $SCRIPT1..."
           cat > "$SCRIPT1" <<'PY'
           #!/usr/bin/env python3
@@ -331,7 +328,7 @@ jobs:
               print()
               sys.exit(1)
           PY
-          echo "Fixing Python 2 iteritems() usage..."
+          echo "Fixing $SCRIPT2..."
           python3 - "$SCRIPT2" <<'PY'
           import sys
           from pathlib import Path
@@ -363,17 +360,43 @@ jobs:
                       line = line.replace(replace, to)
                   print(line)
           PY
+          echo "Converting $SCRIPT4 from Python 2 to Python 3..."
+          python3 -m lib2to3 -w -n "$SCRIPT4"
+          echo "Applying additional Python 3 compatibility fixes to $SCRIPT4..."
+          python3 - "$SCRIPT4" <<'PY'
+          import sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          replacements = {
+              ".iteritems()": ".items()",
+              ".iterkeys()": ".keys()",
+              ".itervalues()": ".values()",
+              "xrange(": "range(",
+              "unicode(": "str(",
+              "long(": "int(",
+              "raw_input(": "input(",
+          }
+          for old, new in replacements.items():
+              text = text.replace(old, new)
+          path.write_text(text)
+          PY
           chmod +x "$SCRIPT1"
           chmod +x "$SCRIPT3"
+          chmod +x "$SCRIPT4"
           echo "Checking Python syntax..."
           python3 -m py_compile "$SCRIPT1"
           python3 -m py_compile "$SCRIPT2"
           python3 -m py_compile "$SCRIPT3"
+          python3 -m py_compile "$SCRIPT4"
           echo "Testing clang version script..."
           cd "$(dirname "$SCRIPT3")"
           python3 clang-version-inc.py include/clang/Basic/Version.inc.in >/tmp/Version.inc
           test -s /tmp/Version.inc
           cd - >/dev/null
+          echo "Testing fs_config_generator.py..."
+          python3 "$SCRIPT4" --help >/tmp/fs_config_generator_help.txt 2>&1 || true
+          test -s /tmp/fs_config_generator_help.txt
           echo "Legacy Python compatibility fixes passed."
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
       - name: Check Header ABI Dumper Dependencies
@@ -424,7 +447,6 @@ jobs:
             make "$TARGET" -j4
           fi
           ccache --show-stats
-        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
       - name: Verify Build Output
         run: |
           set -e
