@@ -252,33 +252,12 @@ jobs:
             echo "No dependency file found."
           fi
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
-      - name: Check Header ABI Dumper Dependencies
-        run: |
-          set -e
-          HEADER_ABI_DUMPER="prebuilts/clang-tools/linux-x86/bin/header-abi-dumper"
-          if [ ! -f "$HEADER_ABI_DUMPER" ]; then
-            echo "WARNING: header-abi-dumper not found yet."
-            exit 0
-          fi
-          echo "Checking: $HEADER_ABI_DUMPER"
-          if ! ldd "$HEADER_ABI_DUMPER" | grep -q "libncurses.so.5"; then
-            echo "ERROR: header-abi-dumper cannot find libncurses.so.5"
-            ldd "$HEADER_ABI_DUMPER"
-            exit 1
-          fi
-          if ! ldd "$HEADER_ABI_DUMPER" | grep -q "libtinfo.so.5"; then
-            echo "ERROR: header-abi-dumper cannot find libtinfo.so.5"
-            ldd "$HEADER_ABI_DUMPER"
-            exit 1
-          fi
-          echo "header-abi-dumper dependencies are OK."
-          ldd "$HEADER_ABI_DUMPER"
-        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
       - name: Fix Legacy Python Scripts
         run: |
           set -e
           SCRIPT1="build/make/tools/check_radio_versions.py"
           SCRIPT2="build/make/tools/post_process_props.py"
+          SCRIPT3="external/clang/clang-version-inc.py"
           echo "Checking legacy Python scripts..."
           if [ ! -f "$SCRIPT1" ]; then
             echo "ERROR: $SCRIPT1 not found."
@@ -288,9 +267,14 @@ jobs:
             echo "ERROR: $SCRIPT2 not found."
             exit 1
           fi
+          if [ ! -f "$SCRIPT3" ]; then
+            echo "ERROR: $SCRIPT3 not found."
+            exit 1
+          fi
           echo "Backing up original scripts..."
           cp "$SCRIPT1" "${SCRIPT1}.python2"
           cp "$SCRIPT2" "${SCRIPT2}.python2"
+          cp "$SCRIPT3" "${SCRIPT3}.python2"
           echo "Fixing $SCRIPT1..."
           cat > "$SCRIPT1" <<'PY'
           #!/usr/bin/env python3
@@ -356,11 +340,61 @@ jobs:
           text = text.replace(".iteritems()", ".items()")
           path.write_text(text)
           PY
+          echo "Fixing $SCRIPT3..."
+          cat > "$SCRIPT3" <<'PY'
+          #!/usr/bin/env python3
+          import sys
+          import version
+          version_string = '%s.%s.%s' % (version.major, version.minor, version.patch)
+          if len(sys.argv) < 2:
+              print("Usage: %s <Version.inc.in>" % sys.argv[0], file=sys.stderr)
+              sys.exit(1)
+          with open(sys.argv[1], 'r') as f:
+              replacements = {
+                  '@CLANG_VERSION@': version_string,
+                  '@CLANG_VERSION_MAJOR@': str(version.major),
+                  '@CLANG_VERSION_MINOR@': str(version.minor),
+                  '@CLANG_VERSION_PATCHLEVEL@': str(version.patch),
+                  '@CLANG_HAS_VERSION_PATCHLEVEL@': '1',
+              }
+              for line in f:
+                  line = line.strip()
+                  for replace, to in replacements.items():
+                      line = line.replace(replace, to)
+                  print(line)
+          PY
           chmod +x "$SCRIPT1"
+          chmod +x "$SCRIPT3"
           echo "Checking Python syntax..."
           python3 -m py_compile "$SCRIPT1"
           python3 -m py_compile "$SCRIPT2"
+          python3 -m py_compile "$SCRIPT3"
+          echo "Testing clang version script..."
+          cd "$(dirname "$SCRIPT3")"
+          python3 clang-version-inc.py include/clang/Basic/Version.inc.in >/tmp/Version.inc
+          test -s /tmp/Version.inc
+          cd - >/dev/null
           echo "Legacy Python compatibility fixes passed."
+        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
+      - name: Check Header ABI Dumper Dependencies
+        run: |
+          set -e
+          HEADER_ABI_DUMPER="prebuilts/clang-tools/linux-x86/bin/header-abi-dumper"
+          if [ ! -f "$HEADER_ABI_DUMPER" ]; then
+            echo "WARNING: header-abi-dumper not found."
+            exit 0
+          fi
+          echo "Checking: $HEADER_ABI_DUMPER"
+          ldd "$HEADER_ABI_DUMPER"
+          if ! ldd "$HEADER_ABI_DUMPER" | grep -q "libncurses.so.5"; then
+            echo "ERROR: header-abi-dumper cannot find libncurses.so.5"
+            exit 1
+          fi
+          if ! ldd "$HEADER_ABI_DUMPER" | grep -q "libtinfo.so.5"; then
+            echo "ERROR: header-abi-dumper cannot find libtinfo.so.5"
+            exit 1
+          fi
+          echo "header-abi-dumper dependencies are OK."
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
       - name: Set Swap Space
         uses: pierotofy/set-swap-space@master
