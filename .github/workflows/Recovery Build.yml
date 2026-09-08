@@ -260,12 +260,39 @@ jobs:
           from pathlib import Path
           p=Path(sys.argv[1])
           t=p.read_text()
-          for a,b in {".iteritems()":".items()",".iterkeys()":".keys()",".itervalues()":".values()","xrange(":"range(","unicode(":"str(","long(":"int(","raw_input(":"input("}.items():
+          replacements={
+              ".iteritems()":".items()",
+              ".iterkeys()":".keys()",
+              ".itervalues()":".values()",
+              "xrange(":"range(",
+              "unicode(":"str(",
+              "long(":"int(",
+              "raw_input(":"input("
+          }
+          for a,b in replacements.items():
               t=t.replace(a,b)
+          p.write_text(t)
+          PY
+          python3 - "$SCRIPT4" <<'PY'
+          import sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          t=p.read_text()
+          old="return any(lower <= value <= upper for (lower, upper) in ranges)"
+          new="return any(int(lower) <= int(value) <= int(upper) for (lower, upper) in ranges)"
+          if old in t:
+              t=t.replace(old,new)
+          old2="return any(lower <= value <= upper for lower, upper in ranges)"
+          new2="return any(int(lower) <= int(value) <= int(upper) for lower, upper in ranges)"
+          if old2 in t:
+              t=t.replace(old2,new2)
           p.write_text(t)
           PY
           chmod +x "$SCRIPT1" "$SCRIPT3" "$SCRIPT4"
           python3 -m py_compile "$SCRIPT1" "$SCRIPT2" "$SCRIPT3" "$SCRIPT4"
+          echo "Testing fs_config_generator.py..."
+          python3 "$SCRIPT4" --help >/tmp/fs_config_help.txt 2>&1 || true
+          grep -q "usage" /tmp/fs_config_help.txt || true
           cd "$(dirname "$SCRIPT3")"
           python3 clang-version-inc.py include/clang/Basic/Version.inc.in >/tmp/Version.inc
           test -s /tmp/Version.inc
