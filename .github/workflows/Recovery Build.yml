@@ -42,14 +42,12 @@ on:
         description: "BUILD_TARGET"
         required: true
         default: "recovery"
-
 jobs:
   build:
     if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-
     steps:
       - name: Display Run Parameters
         run: |
@@ -65,19 +63,14 @@ jobs:
           echo "Makefile: ${{ github.event.inputs.MAKEFILE_NAME }}"
           echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
           echo "::endgroup::"
-
       - name: Checkout Repository
         uses: actions/checkout@v4
-
       - name: Cleanup
         uses: rokibhasansagar/slimhub_actions@main
-
       - name: Prepare Build Environment
         run: |
           set -e
-
           sudo apt-get update
-
           DEBIAN_FRONTEND=noninteractive sudo apt-get install -y \
             linux-modules-extra-$(uname -r) \
             gperf \
@@ -98,6 +91,8 @@ jobs:
             lib32z1-dev \
             liblz4-tool \
             libncurses-dev \
+            libncurses5 \
+            libncurses6 \
             libsdl1.2-dev \
             build-essential \
             libgtk-3-dev \
@@ -116,7 +111,6 @@ jobs:
             ncftp \
             qemu-user-static \
             libstdc++-10-dev \
-            libncurses6 \
             python3 \
             python3-pip \
             python3-setuptools \
@@ -125,20 +119,28 @@ jobs:
             zip \
             rsync \
             libtinfo5
-
+          sudo ldconfig
+          echo "Checking required ncurses libraries..."
+          if ! ldconfig -p | grep -q "libncurses.so.5"; then
+            echo "ERROR: libncurses.so.5 is missing."
+            exit 1
+          fi
+          if ! ldconfig -p | grep -q "libtinfo.so.5"; then
+            echo "ERROR: libtinfo.so.5 is missing."
+            exit 1
+          fi
+          echo "Required legacy ncurses libraries are available."
           git --version
           python3 --version
           make --version | head -n 1
           gcc --version | head -n 1
           ccache --version | head -n 1
-          ldconfig -p | grep libtinfo || true
-
+          ldconfig -p | grep -E 'libncurses.so.5|libtinfo.so.5'
       - name: Install OpenJDK 8
         uses: actions/setup-java@v4
         with:
           distribution: zulu
           java-version: "8"
-
       - name: Setup SSH Keys
         if: |
           startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') ||
@@ -148,141 +150,99 @@ jobs:
         with:
           ssh-private-key: |
             ${{ secrets.SSH_PRIVATE_KEY }}
-
       - name: Install Repo Tool
         run: |
           set -e
-
           mkdir -p "$HOME/bin"
-
-          curl -fsSL \
-            https://storage.googleapis.com/git-repo-downloads/repo \
-            -o "$HOME/bin/repo"
-
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
           chmod +x "$HOME/bin/repo"
-
           sudo ln -sf "$HOME/bin/repo" /usr/local/bin/repo
-
           repo --version
-
       - name: Initialize Repo
         id: workspace
         run: |
           set -e
-
           mkdir -p workspace
           cd workspace
-
           echo "workspace-folder=$(pwd)" >> "$GITHUB_OUTPUT"
-
           git config --global user.name "code_bht"
           git config --global user.email "codebht@gmail.com"
-
           repo init \
             --depth=1 \
             -u "${{ github.event.inputs.MANIFEST_URL }}" \
             -b "${{ github.event.inputs.MANIFEST_BRANCH }}"
-
       - name: Repo Sync
         run: |
           set -e
-
           repo sync \
             -j4 \
             --force-sync \
             --no-clone-bundle \
             --no-tags
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
-
       - name: Clone Device Tree
         run: |
           set -e
-
           DEVICE_PATH="${{ github.event.inputs.DEVICE_PATH }}"
-
           mkdir -p "$(dirname "$DEVICE_PATH")"
-
           git clone \
             --depth=1 \
             -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" \
             "${{ github.event.inputs.DEVICE_TREE_URL }}" \
             "$DEVICE_PATH"
-
           echo "Device tree cloned successfully."
-
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
-
       - name: Clone Common Tree
         if: |
           github.event.inputs.COMMON_TREE_URL != '' &&
           github.event.inputs.COMMON_PATH != ''
         run: |
           set -e
-
           COMMON_PATH="${{ github.event.inputs.COMMON_PATH }}"
-
           mkdir -p "$(dirname "$COMMON_PATH")"
-
           git clone \
             --depth=1 \
             -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" \
             "${{ github.event.inputs.COMMON_TREE_URL }}" \
             "$COMMON_PATH"
-
           echo "Common tree cloned successfully."
-
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
-
       - name: Determine Build Tree
         id: buildtree
         run: |
           set -e
-
           BRANCH="${{ github.event.inputs.MANIFEST_BRANCH }}"
-
           if [[ "$BRANCH" == "twrp-11" || "$BRANCH" == "twrp-12.1" ]]; then
             BUILD_TREE="twrp"
           else
             BUILD_TREE="omni"
           fi
-
           echo "value=$BUILD_TREE" >> "$GITHUB_OUTPUT"
           echo "Build tree: $BUILD_TREE"
-
       - name: Check Device Tree
         run: |
           set -e
-
           DEVICE="${{ github.event.inputs.DEVICE_PATH }}"
-
           if [ ! -d "$DEVICE" ]; then
             echo "ERROR: Device tree directory does not exist."
             exit 1
           fi
-
           echo "Device tree files:"
           find "$DEVICE" -maxdepth 3 -type f | sort | head -200
-
           echo "Device tree check passed."
-
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
-
       - name: Sync Device Dependencies
         run: |
           set -e
-
           DEVICE="${{ github.event.inputs.DEVICE_PATH }}"
           BUILD_TREE="${{ steps.buildtree.outputs.value }}"
           DEP_FILE="$DEVICE/$BUILD_TREE.dependencies"
-
           if [ -f "$DEP_FILE" ]; then
             echo "Dependency file found: $DEP_FILE"
-
             if [ -f "${GITHUB_WORKSPACE}/scripts/convert.sh" ]; then
               echo "Running dependency converter..."
               bash "${GITHUB_WORKSPACE}/scripts/convert.sh" "$DEP_FILE"
             fi
-
             repo sync \
               -j4 \
               --force-sync \
@@ -291,256 +251,188 @@ jobs:
           else
             echo "No dependency file found."
           fi
-
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
-
+      - name: Check Header ABI Dumper Dependencies
+        run: |
+          set -e
+          HEADER_ABI_DUMPER="prebuilts/clang-tools/linux-x86/bin/header-abi-dumper"
+          if [ ! -f "$HEADER_ABI_DUMPER" ]; then
+            echo "WARNING: header-abi-dumper not found yet."
+            exit 0
+          fi
+          echo "Checking: $HEADER_ABI_DUMPER"
+          if ! ldd "$HEADER_ABI_DUMPER" | grep -q "libncurses.so.5"; then
+            echo "ERROR: header-abi-dumper cannot find libncurses.so.5"
+            ldd "$HEADER_ABI_DUMPER"
+            exit 1
+          fi
+          if ! ldd "$HEADER_ABI_DUMPER" | grep -q "libtinfo.so.5"; then
+            echo "ERROR: header-abi-dumper cannot find libtinfo.so.5"
+            ldd "$HEADER_ABI_DUMPER"
+            exit 1
+          fi
+          echo "header-abi-dumper dependencies are OK."
+          ldd "$HEADER_ABI_DUMPER"
+        working-directory: ${{ steps.workspace.outputs.workspace-folder }}
       - name: Fix Legacy Python Scripts
         run: |
           set -e
-
           SCRIPT1="build/make/tools/check_radio_versions.py"
           SCRIPT2="build/make/tools/post_process_props.py"
-
           echo "Checking legacy Python scripts..."
-
           if [ ! -f "$SCRIPT1" ]; then
             echo "ERROR: $SCRIPT1 not found."
             exit 1
           fi
-
           if [ ! -f "$SCRIPT2" ]; then
             echo "ERROR: $SCRIPT2 not found."
             exit 1
           fi
-
           echo "Backing up original scripts..."
-
           cp "$SCRIPT1" "${SCRIPT1}.python2"
           cp "$SCRIPT2" "${SCRIPT2}.python2"
-
           echo "Fixing $SCRIPT1..."
-
           cat > "$SCRIPT1" <<'PY'
           #!/usr/bin/env python3
-
           import sys
-
           try:
               from hashlib import sha1
           except ImportError:
               from sha import sha as sha1
-
           if len(sys.argv) < 2:
               sys.exit(0)
-
           build_info = {}
-
           with open(sys.argv[1]) as f:
               for line in f:
                   line = line.strip()
-
                   if line.startswith("require"):
                       key, value = line.split()[1].split("=", 1)
                       build_info[key] = value
-
           bad = False
-
           for item in sys.argv[2:]:
               key, fn = item.split(":", 1)
-
               values = build_info.get(key)
-
               if not values:
                   continue
-
               values = values.split("|")
-
               with open(fn, "rb") as f:
                   digest = sha1(f.read()).hexdigest()
-
               versions = {}
-
               try:
                   with open(fn + ".sha1") as f:
                       for line in f:
                           line = line.strip()
-
                           if not line or line.startswith("#"):
                               continue
-
                           h, v = line.split()
                           versions[h] = v
-
               except OSError:
                   if not bad:
                       print()
-
-                  print(
-                      "*** Error opening \"%s.sha1\"; can't verify %s"
-                      % (fn, key)
-                  )
-
+                  print("*** Error opening \"%s.sha1\"; can't verify %s" % (fn, key))
                   bad = True
                   continue
-
               if digest not in versions:
                   if not bad:
                       print()
-
-                  print(
-                      "*** SHA-1 hash of \"%s\" doesn't appear in \"%s.sha1\""
-                      % (fn, fn)
-                  )
-
+                  print("*** SHA-1 hash of \"%s\" doesn't appear in \"%s.sha1\"" % (fn, fn))
                   bad = True
                   continue
-
               if versions[digest] not in values:
                   if not bad:
                       print()
-
-                  print(
-                      "*** \"%s\" is version %s; not any %s allowed by \"%s\"."
-                      % (
-                          fn,
-                          versions[digest],
-                          key,
-                          sys.argv[1]
-                      )
-                  )
-
+                  print("*** \"%s\" is version %s; not any %s allowed by \"%s\"." % (fn, versions[digest], key, sys.argv[1]))
                   bad = True
-
           if bad:
               print()
               sys.exit(1)
           PY
-
           echo "Fixing Python 2 iteritems() usage..."
-
           python3 - "$SCRIPT2" <<'PY'
           import sys
           from pathlib import Path
-
           path = Path(sys.argv[1])
           text = path.read_text()
-
           text = text.replace(".iteritems()", ".items()")
-
           path.write_text(text)
           PY
-
           chmod +x "$SCRIPT1"
-
           echo "Checking Python syntax..."
-
           python3 -m py_compile "$SCRIPT1"
           python3 -m py_compile "$SCRIPT2"
-
           echo "Legacy Python compatibility fixes passed."
-
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
-
       - name: Set Swap Space
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 12
-
       - name: Configure CCache
         run: |
           set -e
-
           ccache --max-size=5G
           ccache --set-config=compression=true
           ccache --zero-stats
           ccache --show-config
-
       - name: Build Recovery
         run: |
           set -e
-
           source build/envsetup.sh
-
           export ALLOW_MISSING_DEPENDENCIES=true
           export USE_CCACHE=1
           export CCACHE_EXEC="$(command -v ccache)"
           export JACK_SERVER_VM_ARGUMENTS="-Dfile.encoding=UTF-8"
-
           lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng"
-
           make clean
-
           TARGET="${{ github.event.inputs.BUILD_TARGET }}image"
-
           if command -v mka >/dev/null 2>&1; then
             mka "$TARGET" -j4
           else
             make "$TARGET" -j4
           fi
-
           ccache --show-stats
-
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
-
       - name: Verify Build Output
         run: |
           set -e
-
           OUT="out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
-
           if [ ! -d "$OUT" ]; then
             echo "ERROR: Output directory does not exist."
             exit 1
           fi
-
           IMAGE="$OUT/${{ github.event.inputs.BUILD_TARGET }}.img"
-
           if [ ! -f "$IMAGE" ]; then
             echo "ERROR: Recovery image was NOT generated."
-
             echo "Available images and ZIP files:"
             find "$OUT" -maxdepth 2 -type f \
               \( -name "*.img" -o -name "*.zip" \) \
               -print
-
             exit 1
           fi
-
           echo "Recovery image:"
           ls -lh "$IMAGE"
-
           echo "SHA256:"
           sha256sum "$IMAGE"
-
         working-directory: ${{ steps.workspace.outputs.workspace-folder }}
-
       - name: Prepare Release Files
         run: |
           set -e
-
           OUT="$GITHUB_WORKSPACE/workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
           RELEASE_DIR="$GITHUB_WORKSPACE/release"
-
           mkdir -p "$RELEASE_DIR"
-
           cp "$OUT/${{ github.event.inputs.BUILD_TARGET }}.img" \
             "$RELEASE_DIR/${{ github.event.inputs.DEVICE_NAME }}-${{ github.event.inputs.BUILD_TARGET }}.img"
-
           find "$OUT" \
             -maxdepth 1 \
             -type f \
             -name "*.zip" \
             -exec cp {} "$RELEASE_DIR/" \; || true
-
           find "$OUT" \
             -maxdepth 1 \
             -type f \
             -name "*vendor*.img" \
             -exec cp {} "$RELEASE_DIR/" \; || true
-
           echo "Release files:"
           ls -lah "$RELEASE_DIR"
-
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
@@ -550,25 +442,19 @@ jobs:
           tag_name: "${{ github.run_id }}"
           body: |
             # TWRP Recovery Build
-
             ## Device
             **Device:** ${{ github.event.inputs.DEVICE_NAME }}
             **Target:** ${{ github.event.inputs.BUILD_TARGET }}.img
-
             ## Manifest
             **Manifest branch:** ${{ github.event.inputs.MANIFEST_BRANCH }}
             **Manifest URL:** ${{ github.event.inputs.MANIFEST_URL }}
-
             ## Device Tree
             **Device tree:** ${{ github.event.inputs.DEVICE_TREE_URL }}
             **Branch:** ${{ github.event.inputs.DEVICE_TREE_BRANCH }}
             **Device path:** ${{ github.event.inputs.DEVICE_PATH }}
-
             ## Build
             **GitHub Run:** ${{ github.run_id }}
             **Commit:** ${{ github.sha }}
-
             Built automatically with GitHub Actions.
-
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
