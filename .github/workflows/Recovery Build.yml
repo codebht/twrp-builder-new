@@ -71,11 +71,20 @@ jobs:
       uses: rokibhasansagar/slimhub_actions@main
       # That's it! Now use your normal steps
 
-    
+     
     - name: Prepare the environment
       run: |
         set -e
         sudo apt-get update
+
+        KERNEL_VERSION=$(uname -r)
+        echo "Runner kernel: $KERNEL_VERSION"
+
+        if [[ "$KERNEL_VERSION" != 7.* ]]; then
+          sudo apt-get install -y "linux-modules-extra-$KERNEL_VERSION"
+        else
+          echo "Skipping linux-modules-extra for kernel 7.x"
+        fi
 
         sudo apt-get install -y \
           gperf gcc-multilib g++-multilib \
